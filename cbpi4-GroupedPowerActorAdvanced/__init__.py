@@ -1,8 +1,13 @@
-import asyncio
+
+# -*- coding: utf-8 -*-
+#import os
+#from aiohttp import web
 import logging
+#from unittest.mock import MagicMock, patch
+import asyncio
+import numpy as np
 from cbpi.api import *
-from cbpi.api.base import ActorBase
-from cbpi.api.actor import ActorAction
+from cbpi.api.base import CBPiBase
 
 logger = logging.getLogger("cbpi4-GroupedPowerActor")
 
