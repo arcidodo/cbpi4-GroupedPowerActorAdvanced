@@ -16,8 +16,8 @@ setup(name='cbpi4-GroupedPowerActorAdvanced',
       package_data={
         # If any package contains *.txt or *.rst files, include them:
       '': ['*.txt', '*.rst', '*.yaml'],
-      'cbpi4-GroupedPowerActor': ['*','*.txt', '*.rst', '*.yaml']},
-      packages=['cbpi4-GroupedPowerActor'],
+      'cbpi4-GroupedPowerActorAdvanced': ['*','*.txt', '*.rst', '*.yaml']},
+      packages=['cbpi4-GroupedPowerActorAdvanced'],
       long_description=long_description,
       long_description_content_type='text/markdown'
      )
