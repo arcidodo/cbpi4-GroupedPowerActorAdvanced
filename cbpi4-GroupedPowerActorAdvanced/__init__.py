@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import logging
-from cbpi.api.actor import ActorBase
-from cbpi.api import Property, cbpi
 
-_LOGGER = logging.getLogger(__name__)
+from cbpi.api import cbpi, Property
+# In CBPi 4.7 is de base actor class 'Actor' (of 'ActorBase' in older), 
+# maar in de installed cbpi package blijkt 'Actor' te bestaan
+from cbpi.api.actor import Actor
 
-class GroupedPowerActor(ActorBase):
+_LOGGER = logging.getLogger("cbpi4-GroupedPowerActor")
+
+class GroupedPowerActor(Actor):
     """
-    Actor om meerdere schakelaars tegelijk te bedienen
-    met periodieke controle van de status.
+    Grouped actor: bedient meerdere schakelaars tegelijk én
+    controleert periodiek of ze werkelijk in de gewenste staat zijn.
     """
 
     switch1 = Property.Actor("Switch 1")
@@ -25,10 +28,10 @@ class GroupedPowerActor(ActorBase):
 
     def init(self):
         self._task = None
-        _LOGGER.info("GroupedPowerActor initialized")
+        _LOGGER.info("[GroupedPowerActor] init")
 
     async def start(self):
-        _LOGGER.info("GroupedPowerActor started")
+        _LOGGER.info("[GroupedPowerActor] start")
         self._task = asyncio.create_task(self._periodic_check())
 
     async def stop(self):
@@ -39,53 +42,48 @@ class GroupedPowerActor(ActorBase):
             except asyncio.CancelledError:
                 pass
             self._task = None
-        _LOGGER.info("GroupedPowerActor stopped")
+        _LOGGER.info("[GroupedPowerActor] stop")
 
     async def _periodic_check(self):
         while True:
             try:
-                for switch_prop in [
-                    self.switch1, self.switch2, self.switch3, self.switch4,
-                    self.switch5, self.switch6, self.switch7, self.switch8
-                ]:
-                    if switch_prop:
-                        actual_state = await cbpi.get_actor_state(switch_prop.id)
-                        desired_state = self.get_desired_state(switch_prop)
-                        if actual_state != desired_state:
+                for prop in (self.switch1, self.switch2, self.switch3, self.switch4,
+                             self.switch5, self.switch6, self.switch7, self.switch8):
+                    if prop:
+                        actor_id = prop.id
+                        # Haal huidige actor status
+                        actual = await cbpi.get_actor_state(actor_id)
+                        desired = await self._get_desired(actor_id)
+                        if actual != desired:
                             _LOGGER.warning(
-                                f"Switch '{switch_prop.name}' status mismatch: "
-                                f"gewenst={desired_state}, huidig={actual_state}. Correctie uitvoeren."
+                                f"[GroupedPowerActor] MISMATCH actor {actor_id}: actual={actual}, desired={desired}. Correcting."
                             )
-                            await cbpi.set_actor_state(switch_prop.id, desired_state)
+                            await cbpi.set_actor_state(actor_id, desired)
             except Exception as e:
-                _LOGGER.error(f"Fout bij periodic check: {e}")
+                _LOGGER.error(f"[GroupedPowerActor] periodic check error: {e}")
             await asyncio.sleep(self.interval)
 
-    def get_desired_state(self, switch_prop):
-        """
-        Bepaal gewenste status van een switch. 
-        Pas deze logica aan zoals nodig. 
-        """
-        return 1 if self.is_actor_on(switch_prop) else 0
+    async def _get_desired(self, actor_id):
+        # Afhankelijk hoe jij hebt ingesteld: bijvoorbeeld:
+        # als grouped actor aan is → alle kinderen aan, anders uit
+        # Hier gewoon: grouped actor staat aan als power > 0
+        if int(self.power or 0) > 0:
+            return 1
+        else:
+            return 0
 
-    def is_actor_on(self, switch_prop):
-        """
-        Bepaal huidige gewenste status. Default: uit.
-        """
-        return False
+    @cbpi.action("On")
+    async def on(self, **kwargs):
+        self.power = 100
+        for prop in (self.switch1, self.switch2, self.switch3, self.switch4,
+                     self.switch5, self.switch6, self.switch7, self.switch8):
+            if prop:
+                await cbpi.set_actor_state(prop.id, 1)
 
-    async def on(self, actor=None):
-        for switch_prop in [
-            self.switch1, self.switch2, self.switch3, self.switch4,
-            self.switch5, self.switch6, self.switch7, self.switch8
-        ]:
-            if switch_prop:
-                await cbpi.set_actor_state(switch_prop.id, 1)
-
-    async def off(self, actor=None):
-        for switch_prop in [
-            self.switch1, self.switch2, self.switch3, self.switch4,
-            self.switch5, self.switch6, self.switch7, self.switch8
-        ]:
-            if switch_prop:
-                await cbpi.set_actor_state(switch_prop.id, 0)
+    @cbpi.action("Off")
+    async def off(self, **kwargs):
+        self.power = 0
+        for prop in (self.switch1, self.switch2, self.switch3, self.switch4,
+                     self.switch5, self.switch6, self.switch7, self.switch8):
+            if prop:
+                await cbpi.set_actor_state(prop.id, 0)
