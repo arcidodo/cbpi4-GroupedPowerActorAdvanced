@@ -236,4 +236,14 @@ class GroupedPowerActor(ActorBase):
                 logger.exception(f"[GroupedPowerActor] Error turning off child '{aid}': {e}")
         try:
             await self.cbpi.actor.actor_update(self.id, self.power)
-        except Exceptio
+        except Exception:
+            pass
+
+    def get_state(self):
+        """Return state for CBPi UI"""
+        return dict(power=self.power)
+
+
+def setup(cbpi):
+    cbpi.plugin.register("GroupedPowerActor", GroupedPowerActor)
+    logger.info("GroupedPowerActor (with state-check) loaded")
