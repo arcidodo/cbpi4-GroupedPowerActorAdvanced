@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import logging
-from cbpi.api.base import CBPiActor
+from cbpi.api.actor import ActorBase
 from cbpi.api import Property, cbpi
 
 _LOGGER = logging.getLogger(__name__)
 
-class GroupedPowerActor(CBPiActor):
+class GroupedPowerActor(ActorBase):
     """
-    CBPi4 Actor om meerdere schakelaars tegelijk te bedienen
-    met periodieke controle of ze echt aan/uit staan.
+    Actor om meerdere schakelaars tegelijk te bedienen
+    met periodieke controle van de status.
     """
 
     switch1 = Property.Actor("Switch 1")
@@ -23,21 +23,15 @@ class GroupedPowerActor(CBPiActor):
 
     interval = Property.Number("Check interval (s)", configurable=True, default_value=10)
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def init(self):
         self._task = None
+        _LOGGER.info("GroupedPowerActor initialized")
 
     async def start(self):
-        """
-        Start periodic control loop
-        """
-        _LOGGER.info("GroupedPowerActor gestart")
+        _LOGGER.info("GroupedPowerActor started")
         self._task = asyncio.create_task(self._periodic_check())
 
     async def stop(self):
-        """
-        Stop periodic control loop
-        """
         if self._task:
             self._task.cancel()
             try:
@@ -45,12 +39,9 @@ class GroupedPowerActor(CBPiActor):
             except asyncio.CancelledError:
                 pass
             self._task = None
-        _LOGGER.info("GroupedPowerActor gestopt")
+        _LOGGER.info("GroupedPowerActor stopped")
 
     async def _periodic_check(self):
-        """
-        Controleer periodiek de status van alle geselecteerde switches
-        """
         while True:
             try:
                 for switch_prop in [
@@ -72,23 +63,18 @@ class GroupedPowerActor(CBPiActor):
 
     def get_desired_state(self, switch_prop):
         """
-        Bepaal gewenste status van een switch.
-        Hier kan je logica aanpassen als nodig.
-        Voor nu: als actor 'on' is volgens CBPi, willen we aanzetten.
+        Bepaal gewenste status van een switch. 
+        Pas deze logica aan zoals nodig. 
         """
         return 1 if self.is_actor_on(switch_prop) else 0
 
     def is_actor_on(self, switch_prop):
         """
-        Huidige gewenste status bepalen (je kan hier eigen logica toevoegen)
+        Bepaal huidige gewenste status. Default: uit.
         """
-        # Default: alles uit, kan je aanpassen
         return False
 
-    async def on(self, actor):
-        """
-        Zet alle geselecteerde schakelaars aan
-        """
+    async def on(self, actor=None):
         for switch_prop in [
             self.switch1, self.switch2, self.switch3, self.switch4,
             self.switch5, self.switch6, self.switch7, self.switch8
@@ -96,10 +82,7 @@ class GroupedPowerActor(CBPiActor):
             if switch_prop:
                 await cbpi.set_actor_state(switch_prop.id, 1)
 
-    async def off(self, actor):
-        """
-        Zet alle geselecteerde schakelaars uit
-        """
+    async def off(self, actor=None):
         for switch_prop in [
             self.switch1, self.switch2, self.switch3, self.switch4,
             self.switch5, self.switch6, self.switch7, self.switch8
