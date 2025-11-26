@@ -1,249 +1,108 @@
-# cbpi4-GroupedPowerActor/__init__.py
 # -*- coding: utf-8 -*-
 import asyncio
 import logging
+from cbpi.api.base import CBPiActor
+from cbpi.api import Property, cbpi
 
-from cbpi.api import *
-from cbpi.api.base import ActorBase
-from cbpi.api.actor import ActorAction
+_LOGGER = logging.getLogger(__name__)
 
-logger = logging.getLogger("cbpi4-GroupedPowerActor")
-
-
-@parameters([
-    Property.Actor(label="Actor 1"),
-    Property.Actor(label="Actor 2"),
-    Property.Actor(label="Actor 3"),
-    Property.Actor(label="Actor 4"),
-    Property.Actor(label="Actor 5"),
-    Property.Actor(label="Actor 6"),
-    Property.Actor(label="Actor 7"),
-    Property.Actor(label="Actor 8"),
-    Property.Number(label="Check interval (s)", configurable=True, default_value=5,
-                    description="Every X seconds check that grouped actors are really ON/OFF"),
-    Property.Select(label="Auto-correct mismatch", options=["Yes", "No"], configurable=True, default_value="No",
-                    description="If a grouped actor is not in the correct state, automatically correct it")
-])
-class GroupedPowerActor(ActorBase):
+class GroupedPowerActor(CBPiActor):
     """
-    GroupedPowerActor
-    - Controls up to 8 child actors as a single grouped actor
-    - Periodically checks whether child actors are actually in the desired state
-    - Optionally auto-corrects mismatches
+    CBPi4 Actor om meerdere schakelaars tegelijk te bedienen
+    met periodieke controle of ze echt aan/uit staan.
     """
 
-    def __init__(self, cbpi, id, props):
-        super().__init__(cbpi, id, props)
+    switch1 = Property.Actor("Switch 1")
+    switch2 = Property.Actor("Switch 2")
+    switch3 = Property.Actor("Switch 3")
+    switch4 = Property.Actor("Switch 4")
+    switch5 = Property.Actor("Switch 5")
+    switch6 = Property.Actor("Switch 6")
+    switch7 = Property.Actor("Switch 7")
+    switch8 = Property.Actor("Switch 8")
 
-        # Gather configured actor ids (some may be None/empty)
-        self.group = []
-        for i in range(1, 9):
-            key = f"Actor {i}"
-            val = props.get(key)
-            if val:
-                # Some CBPi installations store actor id as integer, some as string
-                # Keep as-is; later we use it to lookup in cbpi.actor.actor_list
-                self.group.append(val)
+    interval = Property.Number("Check interval (s)", configurable=True, default_value=10)
 
-        # Configurable behaviour
-        try:
-            self.check_interval = int(props.get("Check interval (s)", 5))
-        except Exception:
-            self.check_interval = 5
-        self.auto_correct = (props.get("Auto-correct mismatch", "No") == "Yes")
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._task = None
 
-        # Runtime state
-        self.power = 0  # 0-100 group power
-        self._monitor_task = None
-        self._running = True
+    async def start(self):
+        """
+        Start periodic control loop
+        """
+        _LOGGER.info("GroupedPowerActor gestart")
+        self._task = asyncio.create_task(self._periodic_check())
 
-        logger.info(f"[GroupedPowerActor] init: group={self.group}, check_interval={self.check_interval}, auto_correct={self.auto_correct}")
-
-    async def on_start(self):
-        """Start the background monitor task when actor starts."""
-        logger.info("[GroupedPowerActor] on_start: starting monitor task")
-        # Start the monitor as background task
-        self._monitor_task = asyncio.create_task(self._state_monitor())
-
-    async def on_shutdown(self):
-        """Cleanup on shutdown: cancel monitor task."""
-        logger.info("[GroupedPowerActor] on_shutdown: cancelling monitor task")
-        self._running = False
-        if self._monitor_task:
-            self._monitor_task.cancel()
+    async def stop(self):
+        """
+        Stop periodic control loop
+        """
+        if self._task:
+            self._task.cancel()
             try:
-                await self._monitor_task
+                await self._task
             except asyncio.CancelledError:
                 pass
-            except Exception as e:
-                logger.debug(f"[GroupedPowerActor] on_shutdown: monitor cancel error: {e}")
+            self._task = None
+        _LOGGER.info("GroupedPowerActor gestopt")
 
-    async def _state_monitor(self):
-        """Background loop that periodically checks the real state of child actors."""
-        # short initial delay to let system finish startup
-        await asyncio.sleep(2)
-        logger.info(f"[GroupedPowerActor] State monitor started (interval {self.check_interval}s)")
-
-        while self._running:
-            try:
-                # Only run checks while CBPi marked actor controllers running
-                # but we still allow checks even if this grouped actor hasn't been explicitly turned on by CBPi UI
-                await self._check_group_state()
-            except asyncio.CancelledError:
-                logger.debug("[GroupedPowerActor] State monitor cancelled")
-                break
-            except Exception as e:
-                logger.exception(f"[GroupedPowerActor] Exception in state monitor: {e}")
-
-            # sleep interval
-            try:
-                await asyncio.sleep(self.check_interval)
-            except asyncio.CancelledError:
-                break
-
-    async def _check_group_state(self):
-        """Check each child actor actual 'power' and compare to desired state."""
-        # determine desired boolean (True if group power > 0)
-        desired_on = (self.power > 0)
-
-        for aid in self.group:
-            try:
-                # actor lookup: cbpi.actor.actor_list is a dict-like in this CBPi version
-                actor = None
-                try:
-                    actor = self.cbpi.actor.actor_list.get(aid)
-                except Exception:
-                    # fallback: maybe actor ids are ints or stored differently
-                    # try scanning actor_list keys for something matching string form
-                    for k, v in self.cbpi.actor.actor_list.items():
-                        if str(k) == str(aid) or getattr(v, "name", "") == str(aid):
-                            actor = v
-                            break
-
-                if actor is None:
-                    logger.warning(f"[GroupedPowerActor] Child actor '{aid}' not found")
-                    continue
-
-                # Many actors store last power in attribute 'power'; fallback to get_state()
-                actual_on = False
-                # prefer actor.power when present and numeric
-                if hasattr(actor, "power"):
-                    try:
-                        actual_on = bool(int(round(float(actor.power or 0))))
-                    except Exception:
-                        actual_on = bool(actor.power)
-                else:
-                    # try actor.get_state() if available and returns boolean or dict
-                    try:
-                        st = actor.get_state()
-                        if isinstance(st, dict):
-                            # common format: {'power': N} or {'power': N, ...}
-                            if "power" in st:
-                                actual_on = bool(int(round(float(st.get("power") or 0))))
-                            else:
-                                # fallback: any truthy dict means on
-                                actual_on = True if st else False
-                        else:
-                            actual_on = bool(st)
-                    except Exception:
-                        # last fallback: consider it off
-                        actual_on = False
-
-                if actual_on != desired_on:
-                    logger.warning(f"[GroupedPowerActor] MISMATCH for '{aid}': actual={'ON' if actual_on else 'OFF'} but desired={'ON' if desired_on else 'OFF'}")
-                    if self.auto_correct:
-                        logger.info(f"[GroupedPowerActor] Auto-correcting '{aid}' -> {'ON' if desired_on else 'OFF'}")
-                        try:
-                            if desired_on:
-                                # set full power for child
-                                await actor.on(power=100)
-                            else:
-                                await actor.off()
-                        except Exception as e:
-                            logger.exception(f"[GroupedPowerActor] Failed to autocorrect '{aid}': {e}")
-
-            except Exception as e:
-                logger.exception(f"[GroupedPowerActor] Error checking child actor '{aid}': {e}")
-
-    @ActorAction(name="Set Power", parameters=[Property.Number(label="Power", description="0–100")])
-    async def set_power(self, Power=100, **kwargs):
+    async def _periodic_check(self):
         """
-        Set group power. We will set each child actor to the same Power value.
-        (Simpler and deterministic behaviour for grouped actors.)
+        Controleer periodiek de status van alle geselecteerde switches
         """
-        try:
-            p = int(round(float(Power)))
-        except Exception:
-            p = 0
-        p = max(0, min(100, p))
-        self.power = p
-
-        logger.info(f"[GroupedPowerActor] set_power -> {self.power}% (applying to {len(self.group)} children)")
-
-        # Apply the power to all child actors (set same power)
-        for aid in self.group:
+        while True:
             try:
-                actor = self.cbpi.actor.actor_list.get(aid)
-                if actor is None:
-                    # try fallback lookup like above
-                    for k, v in self.cbpi.actor.actor_list.items():
-                        if str(k) == str(aid) or getattr(v, "name", "") == str(aid):
-                            actor = v
-                            break
-                if actor:
-                    # if power > 0 call on(power), else off()
-                    if p > 0:
-                        await actor.on(power=p)
-                    else:
-                        await actor.off()
+                for switch_prop in [
+                    self.switch1, self.switch2, self.switch3, self.switch4,
+                    self.switch5, self.switch6, self.switch7, self.switch8
+                ]:
+                    if switch_prop:
+                        actual_state = await cbpi.get_actor_state(switch_prop.id)
+                        desired_state = self.get_desired_state(switch_prop)
+                        if actual_state != desired_state:
+                            _LOGGER.warning(
+                                f"Switch '{switch_prop.name}' status mismatch: "
+                                f"gewenst={desired_state}, huidig={actual_state}. Correctie uitvoeren."
+                            )
+                            await cbpi.set_actor_state(switch_prop.id, desired_state)
             except Exception as e:
-                logger.exception(f"[GroupedPowerActor] Error setting child actor '{aid}' power: {e}")
+                _LOGGER.error(f"Fout bij periodic check: {e}")
+            await asyncio.sleep(self.interval)
 
-        # Update CBPi UI for this grouped actor
-        try:
-            await self.cbpi.actor.actor_update(self.id, self.power)
-        except Exception:
-            pass
+    def get_desired_state(self, switch_prop):
+        """
+        Bepaal gewenste status van een switch.
+        Hier kan je logica aanpassen als nodig.
+        Voor nu: als actor 'on' is volgens CBPi, willen we aanzetten.
+        """
+        return 1 if self.is_actor_on(switch_prop) else 0
 
-    @ActorAction(name="On")
-    async def on(self, **kwargs):
-        """Turn group fully on (100%)."""
-        self.power = 100
-        logger.info("[GroupedPowerActor] ON -> turning all children ON (100%)")
-        for aid in self.group:
-            try:
-                actor = self.cbpi.actor.actor_list.get(aid)
-                if actor:
-                    await actor.on(power=100)
-            except Exception as e:
-                logger.exception(f"[GroupedPowerActor] Error turning on child '{aid}': {e}")
-        try:
-            await self.cbpi.actor.actor_update(self.id, self.power)
-        except Exception:
-            pass
+    def is_actor_on(self, switch_prop):
+        """
+        Huidige gewenste status bepalen (je kan hier eigen logica toevoegen)
+        """
+        # Default: alles uit, kan je aanpassen
+        return False
 
-    @ActorAction(name="Off")
-    async def off(self, **kwargs):
-        """Turn group off (0%)."""
-        self.power = 0
-        logger.info("[GroupedPowerActor] OFF -> turning all children OFF")
-        for aid in self.group:
-            try:
-                actor = self.cbpi.actor.actor_list.get(aid)
-                if actor:
-                    await actor.off()
-            except Exception as e:
-                logger.exception(f"[GroupedPowerActor] Error turning off child '{aid}': {e}")
-        try:
-            await self.cbpi.actor.actor_update(self.id, self.power)
-        except Exception:
-            pass
+    async def on(self, actor):
+        """
+        Zet alle geselecteerde schakelaars aan
+        """
+        for switch_prop in [
+            self.switch1, self.switch2, self.switch3, self.switch4,
+            self.switch5, self.switch6, self.switch7, self.switch8
+        ]:
+            if switch_prop:
+                await cbpi.set_actor_state(switch_prop.id, 1)
 
-    def get_state(self):
-        """Return state for CBPi UI"""
-        return dict(power=self.power)
-
-
-def setup(cbpi):
-    cbpi.plugin.register("GroupedPowerActor", GroupedPowerActor)
-    logger.info("GroupedPowerActor (with state-check) loaded")
+    async def off(self, actor):
+        """
+        Zet alle geselecteerde schakelaars uit
+        """
+        for switch_prop in [
+            self.switch1, self.switch2, self.switch3, self.switch4,
+            self.switch5, self.switch6, self.switch7, self.switch8
+        ]:
+            if switch_prop:
+                await cbpi.set_actor_state(switch_prop.id, 0)
