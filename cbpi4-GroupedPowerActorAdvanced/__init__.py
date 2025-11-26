@@ -1,7 +1,8 @@
 import asyncio
 import logging
 from cbpi.api import *
-from cbpi.api.base_actor import ActorBase
+from cbpi.api.base import ActorBase
+from cbpi.api.actor import ActorAction
 
 logger = logging.getLogger("cbpi4-GroupedPowerActor")
 
