@@ -1,11 +1,9 @@
-# -*- coding: utf-8 -*-
-import asyncio
 import logging
-
-from cbpi.api import cbpi, Property
-# In CBPi 4.7 is de base actor class 'Actor' (of 'ActorBase' in older), 
-# maar in de installed cbpi package blijkt 'Actor' te bestaan
-from cbpi.api.actor import Actor
+#from unittest.mock import MagicMock, patch
+import asyncio
+import numpy as np
+from cbpi.api import *
+from cbpi.api.base import CBPiBase
 
 _LOGGER = logging.getLogger("cbpi4-GroupedPowerActor")
 
